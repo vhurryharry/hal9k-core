@@ -882,7 +882,17 @@ interface INBUNIERC20 {
 
 }
 
-// File: @nomiclabs/buidler/console.sol
+// File: contracts/IHAL9KNFTPool.sol
+
+pragma solidity ^0.6.0;
+
+interface IHAL9KNFTPool {
+   function isHal9kStakingStarted(address sender) external view returns(bool);
+   function doHal9kStaking(address sender, uint256 stakeAmount, uint256 currentTime) external;
+   function withdrawLP(address sender, uint256 stakeAmount) external;
+}
+
+// File: hardhat/console.sol
 
 pragma solidity >= 0.4.22 <0.8.0;
 
@@ -2431,6 +2441,7 @@ pragma solidity 0.6.12;
 
 
 
+
 // HAL9K Vault distributes fees equally amongst staked pools
 // Have fun reading it. Hopefully it's bug-free. God bless.
 contract Hal9kVault is OwnableUpgradeSafe {
@@ -2465,24 +2476,42 @@ contract Hal9kVault is OwnableUpgradeSafe {
 
     // The HAL9k TOKEN!
     INBUNIERC20 public hal9k;
+
     // Dev address.
     address public devaddr;
 
     // Info of each pool.
     PoolInfo[] public poolInfo;
-    // Info of each user that stakes  tokens.
+    // Info of each user that stakes tokens.
     mapping(uint256 => mapping(address => UserInfo)) public userInfo;
     // Total allocation poitns. Must be the sum of all allocation points in all pools.
     uint256 public totalAllocPoint;
 
     //// pending rewards awaiting anyone to massUpdate
     uint256 public pendingRewards;
-
     uint256 public contractStartBlock;
     uint256 public epochCalculationStartBlock;
     uint256 public cumulativeRewardsSinceStart;
     uint256 public rewardsInThisEpoch;
     uint256 public epoch;
+
+    function getUserInfo(uint256 _pid, address _userAddress) external view returns (uint256 stakedAmount) {
+        return userInfo[_pid][_userAddress].amount;
+    }
+
+    event NftPoolChanged(
+        address indexed newAddress,
+        address indexed oldAddress
+    );
+
+    IHAL9KNFTPool public _hal9kNftPool;
+
+    function setNftPoolAddress(address hal9kNftPool) public onlyOwner {
+        address oldAddress = address(_hal9kNftPool);
+        _hal9kNftPool = IHAL9KNFTPool(hal9kNftPool);
+
+        emit NftPoolChanged(hal9kNftPool, oldAddress);
+    }
 
     // Returns fees generated since start of this contract
     function averageFeesPerBlockSinceStart()
@@ -2525,7 +2554,7 @@ contract Hal9kVault is OwnableUpgradeSafe {
         ++epoch;
     }
 
-    event Deposit(address indexed user, uint256 indexed pid, uint256 amount);
+    event Deposit(address indexed user, uint256 indexed pid, uint256 amount, uint256 startTime);
     event Withdraw(address indexed user, uint256 indexed pid, uint256 amount);
     event EmergencyWithdraw(
         address indexed user,
@@ -2541,6 +2570,7 @@ contract Hal9kVault is OwnableUpgradeSafe {
 
     function initialize(
         INBUNIERC20 _hal9k,
+        IHAL9KNFTPool hal9kNftPool,
         address _devaddr,
         address superAdmin
     ) public initializer {
@@ -2548,6 +2578,7 @@ contract Hal9kVault is OwnableUpgradeSafe {
         DEV_FEE = 724;
         hal9k = _hal9k;
         devaddr = _devaddr;
+        _hal9kNftPool = hal9kNftPool;
         contractStartBlock = block.number;
         _superAdmin = superAdmin;
     }
@@ -2713,9 +2744,9 @@ contract Hal9kVault is OwnableUpgradeSafe {
             );
             user.amount = user.amount.add(_amount);
         }
-
         user.rewardDebt = user.amount.mul(pool.accHal9kPerShare).div(1e12);
-        emit Deposit(msg.sender, _pid, _amount);
+        if (_amount > 0) _hal9kNftPool.doHal9kStaking(msg.sender, _amount, block.timestamp);
+        emit Deposit(msg.sender, _pid, _amount, block.timestamp);
     }
 
     // Test coverage
@@ -2723,19 +2754,19 @@ contract Hal9kVault is OwnableUpgradeSafe {
     // [x] Does user that its deposited for update correcty?
     // [x] Does the depositor get their tokens decreased
     function depositFor(
-        address depositFor,
+        address _depositFor,
         uint256 _pid,
         uint256 _amount
     ) public {
         // requires no allowances
         PoolInfo storage pool = poolInfo[_pid];
-        UserInfo storage user = userInfo[_pid][depositFor];
+        UserInfo storage user = userInfo[_pid][_depositFor];
 
         massUpdatePools();
 
         // Transfer pending tokens
         // to user
-        updateAndPayOutPending(_pid, depositFor); // Update the balances of person that amount is being deposited for
+        updateAndPayOutPending(_pid, _depositFor); // Update the balances of person that amount is being deposited for
 
         if (_amount > 0) {
             pool.token.safeTransferFrom(
@@ -2747,7 +2778,8 @@ contract Hal9kVault is OwnableUpgradeSafe {
         }
 
         user.rewardDebt = user.amount.mul(pool.accHal9kPerShare).div(1e12); /// This is deposited for address
-        emit Deposit(depositFor, _pid, _amount);
+        if (_amount > 0) _hal9kNftPool.doHal9kStaking(_depositFor, _amount, block.timestamp);
+        emit Deposit(_depositFor, _pid, _amount, block.timestamp);
     }
 
     // Test coverage
@@ -2807,6 +2839,7 @@ contract Hal9kVault is OwnableUpgradeSafe {
         }
         user.rewardDebt = user.amount.mul(pool.accHal9kPerShare).div(1e12);
 
+        if (_amount > 0) _hal9kNftPool.withdrawLP(msg.sender, _amount);
         emit Withdraw(to, _pid, _amount);
     }
 
